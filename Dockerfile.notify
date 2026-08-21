@@ -1,0 +1,38 @@
+# ============================================================
+#  TaskFlow — Dockerfile Notification Service (Go)
+#  Multi-stage: build em golang:alpine, runtime em alpine
+#  (alpine ao invés de scratch para suportar HEALTHCHECK)
+# ============================================================
+
+# ── Stage 1: build ───────────────────────────────────────────
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /build
+
+# Instala certificados SSL (necessário para HTTPS em Go)
+RUN apk add --no-cache ca-certificates git
+
+# Cache de dependências
+COPY notification-service/go.mod ./
+RUN GOFLAGS=-mod=mod go mod download 2>/dev/null || true
+
+# Build otimizado — binário estático
+COPY notification-service/ .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-w -s" -mod=mod -o notification-service .
+
+# ── Stage 2: runtime mínimo (alpine, não scratch) ────────────
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates wget
+
+WORKDIR /app
+COPY --from=builder /build/notification-service .
+
+EXPOSE 8001
+
+# HEALTHCHECK usando wget (disponível no alpine)
+HEALTHCHECK --interval=20s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget --quiet --tries=1 --spider http://localhost:8001/status || exit 1
+
+ENTRYPOINT ["./notification-service"]

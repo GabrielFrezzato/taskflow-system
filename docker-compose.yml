@@ -1,0 +1,75 @@
+# ============================================================
+#  TaskFlow — Docker Compose
+#  Linguagem: YAML
+#  Serviços: backend (Python) | notification (Go) | frontend (Nginx)
+# ============================================================
+
+version: "3.9"
+
+services:
+
+  # ── Backend FastAPI (Python) ───────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: taskflow-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-troque-em-producao}
+      - TOKEN_EXPIRY_MINUTES=${TOKEN_EXPIRY_MINUTES:-60}
+      - DATABASE_URL=sqlite:////app/data/taskflow.db
+    volumes:
+      - db_data:/app/data
+    networks:
+      - taskflow-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ── Notification Service (Go / WebSocket) ─────────────────
+  notification-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.notify
+    container_name: taskflow-notify
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    networks:
+      - taskflow-net
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # ── Frontend (Nginx) ───────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: taskflow-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    networks:
+      - taskflow-net
+    depends_on:
+      - backend
+      - notification-service
+
+# ── Volumes ────────────────────────────────────────────────
+volumes:
+  db_data:
+    driver: local
+    name: taskflow_db_data
+
+# ── Rede interna ───────────────────────────────────────────
+networks:
+  taskflow-net:
+    driver: bridge
+    name: taskflow_network

@@ -1,0 +1,150 @@
+# ============================================================
+#  TaskFlow — CI/CD Pipeline (corrigido)
+#  Linguagem: YAML
+# ============================================================
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+  GO_VERSION: "1.22"
+
+jobs:
+
+  # ─── Lint Python (advisory — não bloqueia) ───────────────
+  lint-python:
+    name: "Lint · Python (ruff)"
+    runs-on: ubuntu-latest
+    continue-on-error: true        # aviso, não falha o pipeline
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install ruff
+        run: pip install ruff --quiet
+
+      - name: Ruff check
+        run: ruff check backend/ --output-format=github
+
+  # ─── Lint Go (advisory — não bloqueia) ───────────────────
+  lint-go:
+    name: "Lint · Go (vet)"
+    runs-on: ubuntu-latest
+    continue-on-error: true        # aviso, não falha o pipeline
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Go vet
+        env:
+          GOFLAGS: "-mod=mod"      # cria go.sum automaticamente se ausente
+        run: |
+          cd notification-service
+          go vet ./...
+
+  # ─── Testes Backend Python ───────────────────────────────
+  test-backend:
+    name: "Test · Python (pytest)"
+    runs-on: ubuntu-latest         # independente do lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Instalar dependências
+        run: pip install -r backend/requirements.txt pytest pytest-asyncio --quiet
+
+      - name: Rodar testes
+        run: python -m pytest backend/tests/ -v --tb=short
+
+  # ─── Build Notification Service (Go) ─────────────────────
+  build-go:
+    name: "Build · Go (notification)"
+    runs-on: ubuntu-latest         # independente do lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build binário
+        env:
+          GOFLAGS: "-mod=mod"      # dispensa go.sum no repositório
+          CGO_ENABLED: "0"
+        run: |
+          cd notification-service
+          mkdir -p bin
+          go build -ldflags="-w -s" -o bin/notification-service .
+
+      - name: Upload binário
+        uses: actions/upload-artifact@v4
+        with:
+          name: notification-service-linux-amd64
+          path: notification-service/bin/notification-service
+          retention-days: 7
+
+  # ─── Build Docker (somente no main) ──────────────────────
+  build-docker:
+    name: "Build · Docker Images"
+    runs-on: ubuntu-latest
+    needs: [test-backend, build-go]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build backend
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.backend
+          push: false
+          tags: taskflow-backend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build notification service
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.notify
+          push: false
+          tags: taskflow-notify:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─── Sumário final ───────────────────────────────────────
+  summary:
+    name: "Sumário do Pipeline"
+    runs-on: ubuntu-latest
+    needs: [lint-python, lint-go, test-backend, build-go]
+    if: always()
+    steps:
+      - name: Gerar sumário
+        run: |
+          echo "## ⬡ TaskFlow CI/CD — ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint Python | ${{ needs.lint-python.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint Go     | ${{ needs.lint-go.result }} |"     >> $GITHUB_STEP_SUMMARY
+          echo "| Tests       | ${{ needs.test-backend.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Go    | ${{ needs.build-go.result }} |"    >> $GITHUB_STEP_SUMMARY
