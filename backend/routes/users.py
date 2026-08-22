@@ -55,7 +55,7 @@ def login(username: str, password: str, db: Session = Depends(get_db)):
     """
     user = db.query(models.User).filter(
         models.User.username == username,
-        models.User.is_active == True,
+        models.User.is_active.is_(True),
     ).first()
 
     if not user or not auth.verify_password(password, user.hashed_password):

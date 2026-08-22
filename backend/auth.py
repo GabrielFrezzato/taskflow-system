@@ -81,7 +81,7 @@ def get_current_user(
 
     user = db.query(models.User).filter(
         models.User.username == token_data.username,
-        models.User.is_active == True,
+        models.User.is_active.is_(True),
     ).first()
 
     if not user:
