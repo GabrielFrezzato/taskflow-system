@@ -104,8 +104,8 @@ TaskFlow é um sistema de gerenciamento de tarefas que demonstra integração en
 
 ```bash
 # 1. Clone o repositório
-git clone https://github.com/seu-usuario/taskflow.git
-cd taskflow
+git clone https://github.com/GabrielFrezzato/taskflow-system.git
+cd taskflow-system
 
 # 2. Setup automático (cria venv, instala deps, gera .env)
 make setup
